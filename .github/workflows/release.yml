@@ -71,6 +71,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ github.event.head_commit.message }}
         run: |
-          $notes = if ($env:NOTES) { $env:NOTES } else { "Melhorias e correções." }
+          # nota = mensagem do commit, sem as linhas técnicas (Co-Authored-By, Signed-off-by, etc.)
+          $notes = (($env:NOTES -split "`n") | Where-Object { $_ -notmatch '^\s*[A-Za-z-]+-By:|^\s*Claude-Session:' }) -join "`n"
+          $notes = $notes.Trim()
+          if (-not $notes) { $notes = "Melhorias e correções." }
           gh release create "v${{ steps.ver.outputs.version }}" "dist\instalador\FundoLimpo-Setup.exe" `
             --repo $env:GITHUB_REPOSITORY --title "FundoLimpo ${{ steps.ver.outputs.version }}" --notes $notes --latest
