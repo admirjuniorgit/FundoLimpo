@@ -1,0 +1,10 @@
+.venv/
+build/
+dist/
+__pycache__/
+*.pyc
+*.7z
+*.part
+# scripts antigos (substituidos pelo commit.sh + GitHub Actions)
+configurar-github.bat
+publicar-versao.bat

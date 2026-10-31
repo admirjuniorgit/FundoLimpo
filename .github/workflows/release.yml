@@ -1,0 +1,76 @@
+# Gera o instalador do FundoLimpo no Windows e publica uma Release quando a VERSION muda.
+# Fluxo: mude VERSION em fundolimpo/app.py -> ./commit.sh "o que mudou" -> esta action compila,
+# cria a release vX.Y.Z com FundoLimpo-Setup.exe e todo mundo que tem o app recebe a atualização.
+name: Publicar versão
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ler versão
+        id: ver
+        run: |
+          $v = (Select-String -Path fundolimpo/app.py -Pattern '^VERSION\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if (-not $v) { throw "VERSION não encontrada em fundolimpo/app.py" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          gh release view "v$v" --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { "exists=true" >> $env:GITHUB_OUTPUT; Write-Host "v$v já publicada - nada a fazer." }
+          else { "exists=false" >> $env:GITHUB_OUTPUT; Write-Host "Publicando v$v" }
+          $global:LASTEXITCODE = 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: actions/setup-python@v5
+        if: steps.ver.outputs.exists == 'false'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Dependências
+        if: steps.ver.outputs.exists == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Empacotar o app (PyInstaller)
+        if: steps.ver.outputs.exists == 'false'
+        run: pyinstaller --noconfirm --clean --log-level WARN FundoLimpo.spec
+
+      - name: Criar o instalador (Inno Setup)
+        if: steps.ver.outputs.exists == 'false'
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Null
+            $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          & $iscc /Q "/DAppVersion=${{ steps.ver.outputs.version }}" instalador\FundoLimpo.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falhou" }
+          Copy-Item "dist\instalador\FundoLimpo-Setup-${{ steps.ver.outputs.version }}.exe" "dist\instalador\FundoLimpo-Setup.exe"
+
+      - name: Publicar a release
+        if: steps.ver.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          $notes = if ($env:NOTES) { $env:NOTES } else { "Melhorias e correções." }
+          gh release create "v${{ steps.ver.outputs.version }}" "dist\instalador\FundoLimpo-Setup.exe" `
+            --repo $env:GITHUB_REPOSITORY --title "FundoLimpo ${{ steps.ver.outputs.version }}" --notes $notes --latest
